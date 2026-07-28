@@ -504,3 +504,19 @@ with tab5:
         label="📥 Télécharger les données (CSV)", data=csv,
         file_name=f"aqi_data_{datetime.now().strftime('%Y%m%d')}.csv", mime="text/csv",
     )
+
+# ---------- Footer ----------
+st.markdown(
+    f"""
+    <div class="footer">
+        <p>🌍 AQI Data Warehouse — Powered by OpenWeatherMap & Streamlit</p>
+        <p style="font-size: 0.8rem;">
+            Données mises à jour toutes les heures •
+            Dernière mise à jour: {filtered["timestamp_utc"].max().strftime('%d/%m/%Y %H:%M')} •
+            Version 2.0
+        </p>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+ 
