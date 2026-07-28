@@ -197,4 +197,32 @@ def get_aqi_badge(aqi_label: str) -> str:
         "Very Poor": "aqi-very-poor",
     }
     return f'<span class="aqi-badge {classes.get(aqi_label, "")}">{aqi_label}</span>'
+
+ # ---------- Application ----------
+st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
  
+df, load_error = load_data()
+ 
+st.markdown(
+    """
+    <div class="main-header">
+        <h1>🌍 AQI Data Warehouse</h1>
+        <p>Tableau de bord interactif de la qualité de l'air — Données en temps réel</p>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+ 
+if load_error is not None:
+    st.error(f"❌ **Impossible de charger les données**\n\n{load_error}")
+    st.info(
+        "Vérifiez que :\n"
+        "- `DATABASE_URL` est défini dans `.env` (local) ou `.streamlit/secrets.toml` (déploiement)\n"
+        "- Le warehouse Neon est accessible depuis votre réseau\n"
+        "- Les tables `fact_air_quality`, `dim_city`, `dim_time` contiennent des données"
+    )
+    st.stop()
+ 
+if df is None or df.empty:
+    st.warning("⚠️ Aucune donnée disponible sur la période demandée.")
+    st.stop()
