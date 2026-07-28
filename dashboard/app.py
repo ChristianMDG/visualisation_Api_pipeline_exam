@@ -173,3 +173,28 @@ def load_data(days_back: int = 30, row_limit: int = 50_000):
             continue
 
     return None, last_error or "Échec de chargement après plusieurs tentatives."
+
+
+# ---------- Fonctions utilitaires AQI ----------
+def get_aqi_color(aqi_value: float) -> str:
+    if aqi_value <= 1:
+        return "#10b981"
+    elif aqi_value <= 2:
+        return "#fbbf24"
+    elif aqi_value <= 3:
+        return "#f59e0b"
+    elif aqi_value <= 4:
+        return "#ef4444"
+    return "#7f1d1d"
+ 
+ 
+def get_aqi_badge(aqi_label: str) -> str:
+    classes = {
+        "Good": "aqi-good",
+        "Fair": "aqi-fair",
+        "Moderate": "aqi-moderate",
+        "Poor": "aqi-poor",
+        "Very Poor": "aqi-very-poor",
+    }
+    return f'<span class="aqi-badge {classes.get(aqi_label, "")}">{aqi_label}</span>'
+ 
