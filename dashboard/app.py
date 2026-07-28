@@ -1,13 +1,13 @@
 """
 AQI Data Warehouse — Interactive Dashboard (Streamlit)
- 
+
 Design ergonomique avec cards, navigation par onglets, filtres avancés,
 et connexion robuste au data warehouse PostgreSQL (Neon).
 """
 import os
 import time
 from datetime import datetime, timedelta
- 
+
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -78,94 +78,4 @@ CUSTOM_CSS = """
     }
 </style>
 """
-# ---------- Connexion à la base de données ----------
-def get_database_url():
-    """Cherche DATABASE_URL dans st.secrets (déploiement) puis dans .env (local)."""
-    load_dotenv()
-    try:
-        if "DATABASE_URL" in st.secrets:
-            return st.secrets["DATABASE_URL"]
-    except Exception:
-        # st.secrets lève une exception si aucun fichier secrets.toml n'existe.
-        # C'est normal en local : on retombe sur la variable d'environnement.
-        pass
-    return os.environ.get("DATABASE_URL")
 
-
-def create_robust_engine(database_url):
-    return create_engine(
-        database_url,
-        pool_pre_ping=True,
-        pool_recycle=300,
-        pool_size=5,
-        max_overflow=10,
-        pool_timeout=30,
-        connect_args={
-            "connect_timeout": 10,
-            "keepalives": 1,
-            "keepalives_idle": 30,
-            "keepalives_interval": 10,
-            "keepalives_count": 5,
-        },
-    )
-
-
-@st.cache_resource
-def get_engine():
-    database_url = get_database_url()
-    if not database_url:
-        return None
-    return create_robust_engine(database_url)
-
-# ---------- Chargement des données ----------
-@st.cache_data(ttl=600, show_spinner="🔄 Chargement des données...")
-def load_data(days_back: int = 30, row_limit: int = 50_000):
-    """
-    Charge les données du warehouse avec retry sur erreurs transitoires.
-    Retourne (df, error_message). error_message est None si tout s'est bien passé.
-    """
-    engine = get_engine()
-    if engine is None:
-        return None, "DATABASE_URL introuvable (ni dans st.secrets, ni dans .env)."
-
-    query = f"""
-        SELECT
-            c.city_name, c.country, c.latitude, c.longitude,
-            t.timestamp_utc, t.date, t.hour, t.day_of_week, t.day_name, t.is_weekend,
-            f.aqi, f.co, f.no, f.no2, f.o3, f.so2, f.pm2_5, f.pm10, f.nh3
-        FROM fact_air_quality f
-        JOIN dim_city c ON c.city_key = f.city_key
-        JOIN dim_time t ON t.time_key = f.time_key
-        WHERE t.date >= CURRENT_DATE - INTERVAL '{days_back} days'
-        ORDER BY c.city_name, t.timestamp_utc
-        LIMIT {row_limit};
-    """
-
-    max_retries = 3
-    last_error = None
-    for attempt in range(max_retries):
-        try:
-            with engine.connect() as conn:
-                conn.execute(text("SELECT 1"))
-
-            df = pd.read_sql(query, engine)
-            if df.empty:
-                return df, None
-
-            df["timestamp_utc"] = pd.to_datetime(df["timestamp_utc"], utc=True)
-            df["aqi_label"] = df["aqi"].map(AQI_LABELS)
-            return df, None
-
-        except SQLAlchemyError as e:
-            last_error = str(e)
-            # Erreur transitoire connue (connexion coupée côté Neon) -> on retente
-            if "SSL" in last_error or "closed" in last_error or "timeout" in last_error.lower():
-                time.sleep(2 * (attempt + 1))  # backoff progressif
-                continue
-            break  # erreur non transitoire (ex: SQL invalide) -> inutile de retenter
-        except Exception as e:
-            last_error = str(e)
-            time.sleep(2 * (attempt + 1))
-            continue
-
-    return None, last_error or "Échec de chargement après plusieurs tentatives."
