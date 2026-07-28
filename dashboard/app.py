@@ -78,3 +78,41 @@ CUSTOM_CSS = """
     }
 </style>
 """
+# ---------- Connexion à la base de données ----------
+def get_database_url():
+    """Cherche DATABASE_URL dans st.secrets (déploiement) puis dans .env (local)."""
+    load_dotenv()
+    try:
+        if "DATABASE_URL" in st.secrets:
+            return st.secrets["DATABASE_URL"]
+    except Exception:
+        # st.secrets lève une exception si aucun fichier secrets.toml n'existe.
+        # C'est normal en local : on retombe sur la variable d'environnement.
+        pass
+    return os.environ.get("DATABASE_URL")
+
+
+def create_robust_engine(database_url):
+    return create_engine(
+        database_url,
+        pool_pre_ping=True,
+        pool_recycle=300,
+        pool_size=5,
+        max_overflow=10,
+        pool_timeout=30,
+        connect_args={
+            "connect_timeout": 10,
+            "keepalives": 1,
+            "keepalives_idle": 30,
+            "keepalives_interval": 10,
+            "keepalives_count": 5,
+        },
+    )
+
+
+@st.cache_resource
+def get_engine():
+    database_url = get_database_url()
+    if not database_url:
+        return None
+    return create_robust_engine(database_url)
