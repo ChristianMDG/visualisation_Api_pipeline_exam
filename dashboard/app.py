@@ -282,3 +282,56 @@ with st.sidebar:
 if filtered.empty:
     st.warning("⚠️ Aucune donnée ne correspond aux filtres sélectionnés.")
     st.stop()
+
+# ---------- Métriques principales ----------
+st.markdown("### 📊 Vue d'ensemble")
+ 
+col1, col2, col3, col4, col5 = st.columns(5)
+ 
+with col1:
+    st.markdown(
+        f"""<div class="metric-card"><div class="label">📊 Total mesures</div>
+        <div class="value">{len(filtered):,}</div></div>""",
+        unsafe_allow_html=True,
+    )
+ 
+with col2:
+    st.markdown(
+        f"""<div class="metric-card"><div class="label">🏙️ Villes</div>
+        <div class="value">{filtered['city_name'].nunique()}</div></div>""",
+        unsafe_allow_html=True,
+    )
+ 
+with col3:
+    avg_aqi = filtered["aqi"].mean()
+    color = get_aqi_color(avg_aqi)
+    st.markdown(
+        f"""<div class="metric-card" style="border-left-color: {color};">
+        <div class="label">📈 AQI moyen</div>
+        <div class="value" style="color: {color};">{avg_aqi:.2f}</div></div>""",
+        unsafe_allow_html=True,
+    )
+ 
+with col4:
+    max_aqi = filtered["aqi"].max()
+    color = get_aqi_color(max_aqi)
+    st.markdown(
+        f"""<div class="metric-card" style="border-left-color: {color};">
+        <div class="label">🔴 AQI max</div>
+        <div class="value" style="color: {color};">{max_aqi:.2f}</div></div>""",
+        unsafe_allow_html=True,
+    )
+ 
+with col5:
+    best_city = filtered.groupby("city_name")["aqi"].mean().idxmin()
+    best_aqi = filtered.groupby("city_name")["aqi"].mean().min()
+    st.markdown(
+        f"""<div class="metric-card" style="border-left-color: #10b981;">
+        <div class="label">🌟 Meilleure ville</div>
+        <div class="value" style="font-size: 1.2rem;">{best_city}</div>
+        <div class="change">AQI: {best_aqi:.2f}</div></div>""",
+        unsafe_allow_html=True,
+    )
+ 
+st.markdown("---")
+ 
