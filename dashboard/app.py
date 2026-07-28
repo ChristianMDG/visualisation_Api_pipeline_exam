@@ -334,4 +334,173 @@ with col5:
     )
  
 st.markdown("---")
+
+# ---------- Tabs ----------
+tab1, tab2, tab3, tab4, tab5 = st.tabs(
+    ["📊 Overview", "🏙️ Villes", "📈 Tendances", "🔗 Corrélations", "📋 Données"]
+)
  
+with tab1:
+    col1, col2 = st.columns([2, 1])
+ 
+    with col1:
+        st.subheader("🌍 Carte des villes")
+        city_points = filtered.dropna(subset=["latitude", "longitude"]).drop_duplicates("city_name")[
+            ["city_name", "latitude", "longitude"]
+        ]
+        city_avg = filtered.groupby("city_name")["aqi"].mean().reset_index()
+        city_points = city_points.merge(city_avg, on="city_name")
+ 
+        if city_points.empty:
+            st.info("Aucune coordonnée géographique disponible pour les villes sélectionnées.")
+        else:
+            fig_map = px.scatter_geo(
+                city_points, lat="latitude", lon="longitude", hover_name="city_name",
+                size="aqi", color="aqi", color_continuous_scale="RdYlGn_r",
+                projection="natural earth", title="Qualité de l'air par ville",
+            )
+            fig_map.update_layout(height=500)
+            st.plotly_chart(fig_map, use_container_width=True)
+ 
+    with col2:
+        st.subheader("📊 Distribution AQI")
+        aqi_dist = filtered["aqi_label"].value_counts().reset_index()
+        aqi_dist.columns = ["Category", "Count"]
+ 
+        fig_pie = px.pie(
+            aqi_dist, values="Count", names="Category", color="Category",
+            color_discrete_map=AQI_COLORS, hole=0.4,
+        )
+        fig_pie.update_layout(height=300)
+        st.plotly_chart(fig_pie, use_container_width=True)
+ 
+        st.subheader("🌟 Top 5 meilleures villes")
+        best_cities = filtered.groupby("city_name")["aqi"].mean().sort_values().head(5)
+        for city, aqi in best_cities.items():
+            color = get_aqi_color(aqi)
+            st.markdown(
+                f"""<div style="display: flex; justify-content: space-between; padding: 0.3rem 0;
+                border-bottom: 1px solid #e2e8f0;">
+                <span>{city}</span>
+                <span style="color: {color}; font-weight: 600;">AQI: {aqi:.2f}</span></div>""",
+                unsafe_allow_html=True,
+            )
+ 
+with tab2:
+    st.subheader("🏙️ Comparaison des villes")
+ 
+    city_stats = filtered.groupby("city_name").agg(
+        {"aqi": ["mean", "min", "max", "std"], "timestamp_utc": "count"}
+    ).round(2)
+    city_stats.columns = ["AQI moyen", "AQI min", "AQI max", "Écart-type", "Mesures"]
+    city_stats = city_stats.sort_values("AQI moyen")
+ 
+    st.dataframe(city_stats, use_container_width=True)
+ 
+    fig_city_bar = px.bar(
+        city_stats.reset_index(), x="city_name", y="AQI moyen",
+        color="AQI moyen", color_continuous_scale="RdYlGn_r", title="AQI moyen par ville",
+    )
+    st.plotly_chart(fig_city_bar, use_container_width=True)
+ 
+    fig_box = px.box(filtered, x="city_name", y="aqi", color="city_name", title="Distribution AQI par ville")
+    st.plotly_chart(fig_box, use_container_width=True)
+ 
+with tab3:
+    st.subheader("📈 Évolution temporelle")
+ 
+    trend_cities = st.multiselect(
+        "Villes pour les tendances", selected_cities,
+        default=selected_cities[:2] if len(selected_cities) > 2 else selected_cities,
+    )
+ 
+    if trend_cities:
+        trend_data = filtered[filtered["city_name"].isin(trend_cities)]
+ 
+        daily = (
+            trend_data.set_index("timestamp_utc")
+            .groupby("city_name")["aqi"]
+            .resample("1D").mean()
+            .reset_index()
+        )
+        fig_trend = px.line(daily, x="timestamp_utc", y="aqi", color="city_name",
+                             title="Évolution AQI - Moyenne quotidienne")
+        fig_trend.update_layout(height=400)
+        st.plotly_chart(fig_trend, use_container_width=True)
+ 
+        st.subheader("🕐 Heatmap horaire")
+        hourly_pivot = trend_data.pivot_table(index="hour", columns="city_name", values="aqi", aggfunc="mean")
+        fig_heatmap = px.imshow(
+            hourly_pivot, labels=dict(x="Ville", y="Heure", color="AQI"),
+            title="AQI moyen par heure et par ville", color_continuous_scale="RdYlGn_r",
+        )
+        fig_heatmap.update_layout(height=400)
+        st.plotly_chart(fig_heatmap, use_container_width=True)
+ 
+        st.subheader("📅 Week-end vs Semaine")
+        wk = trend_data.groupby(["city_name", "is_weekend"])["aqi"].mean().reset_index()
+        # is_weekend vient de Postgres comme un vrai BOOLEAN -> True/False, pas 1/0.
+        # On gère les deux cas pour rester robuste si la colonne change de type un jour.
+        wk["period"] = wk["is_weekend"].map({True: "Week-end", False: "Semaine", 1: "Week-end", 0: "Semaine"})
+ 
+        fig_wk = px.bar(wk, x="city_name", y="aqi", color="period", barmode="group",
+                         title="AQI moyen - Week-end vs Semaine")
+        st.plotly_chart(fig_wk, use_container_width=True)
+    else:
+        st.info("ℹ️ Sélectionnez au moins une ville pour voir les tendances.")
+ 
+with tab4:
+    st.subheader("🔗 Corrélations entre polluants")
+ 
+    variables = ["aqi"] + POLLUTANTS
+    corr_pollutants = st.multiselect(
+        "Polluants pour la matrice de corrélation", variables,
+        default=["aqi", "pm2_5", "pm10", "no2", "o3", "co"],
+    )
+ 
+    if len(corr_pollutants) >= 2:
+        corr_data = filtered[corr_pollutants].corr()
+        fig_corr = px.imshow(
+            corr_data, text_auto=".2f", color_continuous_scale="RdBu_r",
+            zmin=-1, zmax=1, title="Matrice de corrélation",
+        )
+        fig_corr.update_layout(height=500)
+        st.plotly_chart(fig_corr, use_container_width=True)
+ 
+        st.subheader("📊 Analyse bivariée")
+        col1, col2 = st.columns(2)
+        with col1:
+            x_var = st.selectbox("Variable X", variables, index=0)
+        with col2:
+            default_idx = min(5, len(variables) - 1)
+            y_var = st.selectbox("Variable Y", variables, index=default_idx)
+ 
+        fig_scatter = px.scatter(
+            filtered, x=x_var, y=y_var, color="city_name", opacity=0.5,
+            trendline="ols", title=f"{x_var} vs {y_var}",
+        )
+        st.plotly_chart(fig_scatter, use_container_width=True)
+    else:
+        st.info("ℹ️ Sélectionnez au moins 2 polluants pour voir les corrélations")
+ 
+with tab5:
+    st.subheader("📋 Données brutes")
+ 
+    page_size = st.selectbox("Lignes par page", [10, 25, 50, 100], index=1)
+    total_rows = len(filtered)
+    total_pages = max(1, (total_rows - 1) // page_size + 1)
+ 
+    page = st.number_input("Page", min_value=1, max_value=total_pages, value=1)
+    start_idx = (page - 1) * page_size
+    end_idx = min(start_idx + page_size, total_rows)
+ 
+    display_cols = ["city_name", "timestamp_utc", "aqi", "aqi_label"] + selected_pollutants
+    display_cols = [col for col in display_cols if col in filtered.columns]
+ 
+    st.dataframe(filtered[display_cols].iloc[start_idx:end_idx], use_container_width=True, height=400)
+ 
+    csv = filtered[display_cols].to_csv(index=False).encode("utf-8")
+    st.download_button(
+        label="📥 Télécharger les données (CSV)", data=csv,
+        file_name=f"aqi_data_{datetime.now().strftime('%Y%m%d')}.csv", mime="text/csv",
+    )
