@@ -226,3 +226,59 @@ if load_error is not None:
 if df is None or df.empty:
     st.warning("⚠️ Aucune donnée disponible sur la période demandée.")
     st.stop()
+
+# ---------- Sidebar ----------
+with st.sidebar:
+    st.image("https://img.icons8.com/color/96/000000/air-quality.png", width=80)
+    st.markdown("### 🎛️ Filtres")
+ 
+    cities = sorted(df["city_name"].unique())
+    selected_cities = st.multiselect(
+        "🏙️ Villes", cities, default=cities[:3] if len(cities) > 3 else cities,
+        help="Sélectionnez les villes à afficher",
+    )
+ 
+    date_min = df["timestamp_utc"].min().date()
+    date_max = df["timestamp_utc"].max().date()
+    default_start = max(date_min, date_max - timedelta(days=7))
+ 
+    col1, col2 = st.columns(2)
+    with col1:
+        start_date = st.date_input("📅 Début", default_start, min_value=date_min, max_value=date_max)
+    with col2:
+        end_date = st.date_input("📅 Fin", date_max, min_value=date_min, max_value=date_max)
+ 
+    with st.expander("🔍 Filtres avancés"):
+        aqi_lo, aqi_hi = float(df["aqi"].min()), float(df["aqi"].max())
+        if aqi_lo == aqi_hi:
+            # Un slider Streamlit exige min < max : on élargit artificiellement
+            aqi_lo, aqi_hi = aqi_lo - 0.5, aqi_hi + 0.5
+        aqi_min, aqi_max = st.slider("AQI Range", min_value=aqi_lo, max_value=aqi_hi, value=(aqi_lo, aqi_hi))
+ 
+        selected_pollutants = st.multiselect(
+            "Polluants à afficher", POLLUTANTS, default=["pm2_5", "pm10", "no2", "o3"]
+        )
+ 
+    st.markdown("---")
+    st.markdown("### 📊 Statistiques")
+ 
+    filtered = df[df["city_name"].isin(selected_cities)]
+    filtered = filtered[
+        (filtered["timestamp_utc"].dt.date >= start_date) & (filtered["timestamp_utc"].dt.date <= end_date)
+    ]
+    filtered = filtered[(filtered["aqi"] >= aqi_min) & (filtered["aqi"] <= aqi_max)]
+ 
+    if not filtered.empty:
+        st.metric("📊 Total mesures", f"{len(filtered):,}")
+        st.metric("🏙️ Villes", filtered["city_name"].nunique())
+        st.metric("📈 AQI moyen", f"{filtered['aqi'].mean():.2f}")
+        st.metric("🔴 AQI max", f"{filtered['aqi'].max():.2f}")
+        last_update = filtered["timestamp_utc"].max()
+        st.caption(f"🕐 Dernière mise à jour: {last_update.strftime('%d/%m/%Y %H:%M')}")
+ 
+    st.markdown("---")
+    st.caption("💡 *Les données sont mises à jour toutes les heures*")
+ 
+if filtered.empty:
+    st.warning("⚠️ Aucune donnée ne correspond aux filtres sélectionnés.")
+    st.stop()
