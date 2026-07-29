@@ -296,7 +296,7 @@ ORDER BY t.date DESC, avg_aqi DESC;
 - **URL**: [https://visualisationapipipelineexam-hstpuff4tophekaghbqrf4.streamlit.app](https://visualisationapipipelineexam-hstpuff4tophekaghbqrf4.streamlit.app)
 
 ### 📁 Source Code
-- **Repository**: `https://github.com/your-username/aqi-consumer`
+- **Repository**: `https://github.com/ChristianMDG/visualisation_Api_pipeline_exam.git`
 
 ### 📚 Documentation
 - [Streamlit Documentation](https://docs.streamlit.io/)
