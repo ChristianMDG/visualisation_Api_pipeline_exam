@@ -341,8 +341,6 @@ def get_database_url():
         if "DATABASE_URL" in st.secrets:
             return st.secrets["DATABASE_URL"]
     except Exception:
-        # st.secrets raises an exception if no secrets.toml file exists.
-        # That's expected locally: we fall back to the environment variable.
         pass
     return os.environ.get("DATABASE_URL")
 
@@ -378,7 +376,7 @@ def get_engine():
 # the ENTIRE warehouse. Filtering by period happens afterwards on the
 # sidebar (client) side. A safety cap (SAFETY_ROW_CAP) just guards against
 # a runaway query if the pipeline has been running for a very long time.
-SAFETY_ROW_CAP = 1_000_000
+SAFETY_ROW_CAP = 100_000
 
 
 @st.cache_data(ttl=600, show_spinner="Loading warehouse data...")
