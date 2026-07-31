@@ -1,23 +1,22 @@
 """
 AQI Data Warehouse — Interactive Dashboard (Streamlit)
 
-Console de monitoring de la qualité de l'air : connexion robuste au warehouse
-PostgreSQL (Neon), navigation par onglets, filtres avancés, design sombre
-technique (Inter + JetBrains Mono).
+Air quality monitoring console: robust connection to the PostgreSQL warehouse
+(Neon), tab-based navigation, advanced filters, dark technical design
+(Inter + JetBrains Mono).
 """
 import os
 import time
 from datetime import datetime, timedelta
-
+from dotenv import load_dotenv, find_dotenv
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
-from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
 
-# ---------- Configuration de la page ----------
+# ---------- Page configuration ----------
 st.set_page_config(
     page_title="AQI Data Warehouse",
     page_icon="◆",
@@ -25,10 +24,10 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# Thème Plotly global : toutes les figures px.* héritent de ce template sombre
+# Global Plotly theme: all px.* figures inherit this dark template
 px.defaults.template = "plotly_dark"
 
-# ---------- Constantes ----------
+# ---------- Constants ----------
 AQI_LABELS = {1: "Good", 2: "Fair", 3: "Moderate", 4: "Poor", 5: "Very Poor"}
 AQI_COLORS = {
     "Good": "#22c55e",
@@ -40,7 +39,7 @@ AQI_COLORS = {
 AQI_ORDER = ["Good", "Fair", "Moderate", "Poor", "Very Poor"]
 POLLUTANTS = ["co", "no", "no2", "o3", "so2", "pm2_5", "pm10", "nh3"]
 
-# ---------- Style : console technique sombre ----------
+# ---------- Style: dark technical console ----------
 CUSTOM_CSS = """
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
@@ -56,7 +55,7 @@ CUSTOM_CSS = """
     html, body, [class*="css"] { font-family: 'Inter', -apple-system, sans-serif; }
     .stApp { background: var(--bg); }
 
-    /* En-tête */
+    /* Header */
     .app-header {
         border-bottom: 1px solid var(--border);
         padding: 0 0 1.25rem 0;
@@ -95,7 +94,7 @@ CUSTOM_CSS = """
         padding-left: 0.5rem;
     }
 
-    /* Cards métriques */
+    /* Metric cards */
     .metric-card {
         background: var(--surface);
         border: 1px solid var(--border);
@@ -126,7 +125,7 @@ CUSTOM_CSS = """
         margin-top: 0.25rem;
     }
 
-    /* Badges AQI (contour, pas de remplissage) */
+    /* AQI badges (outline, no fill) */
     .aqi-badge {
         display: inline-flex;
         align-items: center;
@@ -144,7 +143,7 @@ CUSTOM_CSS = """
     .aqi-poor { color: #f97316; }
     .aqi-very-poor { color: #ef4444; }
 
-    /* Lignes de classement */
+    /* Ranking rows */
     .rank-row {
         display: flex;
         justify-content: space-between;
@@ -169,7 +168,7 @@ CUSTOM_CSS = """
     }
     .stTabs [aria-selected="true"] { color: var(--accent) !important; }
 
-    /* Dataframes / metrics natifs Streamlit */
+    /* Native Streamlit dataframes / metrics */
     [data-testid="stMetricValue"] { font-family: 'JetBrains Mono', monospace; }
 
     /* Footer */
@@ -216,7 +215,7 @@ CUSTOM_CSS = """
         color: var(--text-muted);
     }
 
-    /* Cards natives st.container(border=True) dans la sidebar */
+    /* Native st.container(border=True) cards in the sidebar */
     section[data-testid="stSidebar"] [data-testid="stVerticalBlockBorderWrapper"] {
         background: var(--bg);
         border: 1px solid var(--border) !important;
@@ -246,7 +245,7 @@ CUSTOM_CSS = """
         display: inline-block;
     }
 
-    /* Widgets : multiselect, selectbox, date input */
+    /* Widgets: multiselect, selectbox, date input */
     section[data-testid="stSidebar"] [data-baseweb="select"] > div,
     section[data-testid="stSidebar"] input {
         background: var(--surface) !important;
@@ -317,7 +316,7 @@ CUSTOM_CSS = """
         box-shadow: 0 0 6px #22c55e;
     }
 
-    /* Scrollbar sidebar */
+    /* Sidebar scrollbar */
     section[data-testid="stSidebar"] ::-webkit-scrollbar { width: 6px; }
     section[data-testid="stSidebar"] ::-webkit-scrollbar-thumb {
         background: var(--border); border-radius: 3px;
@@ -331,16 +330,19 @@ CUSTOM_CSS = """
 """
 
 
-# ---------- Connexion à la base de données ----------
+# ---------- Database connection ----------
 def get_database_url():
-    """Cherche DATABASE_URL dans st.secrets (déploiement) puis dans .env (local)."""
-    load_dotenv()
+    """Looks for DATABASE_URL in st.secrets (deployment), then in .env (local)."""
+    os.environ.pop("DATABASE_URL", None)
+    env_path = find_dotenv()
+    load_dotenv(env_path, override=True)
+
     try:
         if "DATABASE_URL" in st.secrets:
             return st.secrets["DATABASE_URL"]
     except Exception:
-        # st.secrets lève une exception si aucun fichier secrets.toml n'existe.
-        # C'est normal en local : on retombe sur la variable d'environnement.
+        # st.secrets raises an exception if no secrets.toml file exists.
+        # That's expected locally: we fall back to the environment variable.
         pass
     return os.environ.get("DATABASE_URL")
 
@@ -371,24 +373,24 @@ def get_engine():
     return create_robust_engine(database_url)
 
 
-# ---------- Chargement des données ----------
-# IMPORTANT : pas de fenêtre de date ni de LIMIT côté SQL par défaut -> on charge
-# TOUT le warehouse. Le filtrage par période se fait ensuite côté sidebar (client).
-# Un plafond de sécurité (SAFETY_ROW_CAP) évite juste une requête runaway si le
-# pipeline tourne depuis très longtemps.
+# ---------- Data loading ----------
+# IMPORTANT: no date window or LIMIT on the SQL side by default -> we load
+# the ENTIRE warehouse. Filtering by period happens afterwards on the
+# sidebar (client) side. A safety cap (SAFETY_ROW_CAP) just guards against
+# a runaway query if the pipeline has been running for a very long time.
 SAFETY_ROW_CAP = 1_000_000
 
 
-@st.cache_data(ttl=600, show_spinner="Chargement des données du warehouse...")
+@st.cache_data(ttl=600, show_spinner="Loading warehouse data...")
 def load_data():
     """
-    Charge TOUTES les lignes du warehouse, avec retry sur erreurs transitoires.
-    Retourne (df, error_message, truncated). error_message est None si tout va bien.
-    truncated est True si le plafond de sécurité a été atteint.
+    Loads ALL rows from the warehouse, with retry on transient errors.
+    Returns (df, error_message, truncated). error_message is None if everything is fine.
+    truncated is True if the safety cap was reached.
     """
     engine = get_engine()
     if engine is None:
-        return None, "DATABASE_URL introuvable (ni dans st.secrets, ni dans .env).", False
+        return None, "DATABASE_URL not found (neither in st.secrets nor in .env).", False
 
     query = f"""
         SELECT
@@ -424,18 +426,18 @@ def load_data():
         except SQLAlchemyError as e:
             last_error = str(e)
             if "SSL" in last_error or "closed" in last_error or "timeout" in last_error.lower():
-                time.sleep(2 * (attempt + 1))  # backoff progressif
+                time.sleep(2 * (attempt + 1))  # progressive backoff
                 continue
-            break  # erreur non transitoire (ex: SQL invalide) -> inutile de retenter
+            break  # non-transient error (e.g. invalid SQL) -> no point retrying
         except Exception as e:
             last_error = str(e)
             time.sleep(2 * (attempt + 1))
             continue
 
-    return None, last_error or "Échec de chargement après plusieurs tentatives.", False
+    return None, last_error or "Loading failed after several attempts.", False
 
 
-# ---------- Fonctions utilitaires AQI ----------
+# ---------- AQI helper functions ----------
 def get_aqi_color(aqi_value: float) -> str:
     if aqi_value <= 1:
         return AQI_COLORS["Good"]
@@ -469,31 +471,31 @@ st.markdown(
     <div class="app-header">
         <div class="eyebrow">DataGreen · MangaRivotra</div>
         <h1>AQI Data Warehouse</h1>
-        <p>Monitoring de la qualité de l'air — pipeline Airflow / warehouse Postgres</p>
+        <p>Air quality monitoring — Airflow pipeline / Postgres warehouse</p>
     </div>
     """,
     unsafe_allow_html=True,
 )
 
 if load_error is not None:
-    st.error(f"**Impossible de charger les données**\n\n{load_error}")
+    st.error(f"**Unable to load data**\n\n{load_error}")
     st.info(
-        "Vérifiez que :\n"
-        "- `DATABASE_URL` est défini dans `.env` (local) ou `.streamlit/secrets.toml` (déploiement)\n"
-        "- Le warehouse Neon est accessible depuis votre réseau\n"
-        "- Les tables `fact_air_quality`, `dim_city`, `dim_time` contiennent des données"
+        "Check that:\n"
+        "- `DATABASE_URL` is defined in `.env` (local) or `.streamlit/secrets.toml` (deployment)\n"
+        "- The Neon warehouse is reachable from your network\n"
+        "- The `fact_air_quality`, `dim_city`, `dim_time` tables contain data"
     )
     st.stop()
 
 if df is None or df.empty:
-    st.warning("Aucune donnée disponible dans le warehouse pour le moment.")
+    st.warning("No data available in the warehouse at this time.")
     st.stop()
 
 if truncated:
     st.warning(
-        f"Le warehouse contient plus de {SAFETY_ROW_CAP:,} lignes : "
-        f"seules les {SAFETY_ROW_CAP:,} premières ont été chargées pour rester réactif. "
-        "Réduis la période dans la sidebar si tu veux affiner."
+        f"The warehouse contains more than {SAFETY_ROW_CAP:,} rows: "
+        f"only the first {SAFETY_ROW_CAP:,} were loaded to stay responsive. "
+        "Narrow the period in the sidebar if you want to refine the results."
     )
 
 # ---------- Sidebar ----------
@@ -516,31 +518,31 @@ with st.sidebar:
     date_max = df["timestamp_utc"].max().date()
 
     with st.container(border=True):
-        st.markdown('<div class="sidebar-card-label">Villes</div>', unsafe_allow_html=True)
+        st.markdown('<div class="sidebar-card-label">Cities</div>', unsafe_allow_html=True)
         selected_cities = st.multiselect(
-            "Villes", cities, default=cities, label_visibility="collapsed",
-            help="Sélectionnez les villes à afficher",
+            "Cities", cities, default=cities, label_visibility="collapsed",
+            help="Select the cities to display",
         )
 
     with st.container(border=True):
-        st.markdown('<div class="sidebar-card-label">Période</div>', unsafe_allow_html=True)
+        st.markdown('<div class="sidebar-card-label">Period</div>', unsafe_allow_html=True)
         col1, col2 = st.columns(2)
         with col1:
-            start_date = st.date_input("Début", date_min, min_value=date_min, max_value=date_max)
+            start_date = st.date_input("Start", date_min, min_value=date_min, max_value=date_max)
         with col2:
-            end_date = st.date_input("Fin", date_max, min_value=date_min, max_value=date_max)
+            end_date = st.date_input("End", date_max, min_value=date_min, max_value=date_max)
 
     with st.container(border=True):
-        st.markdown('<div class="sidebar-card-label">Filtres avancés</div>', unsafe_allow_html=True)
-        with st.expander("AQI & polluants", expanded=False):
+        st.markdown('<div class="sidebar-card-label">Advanced filters</div>', unsafe_allow_html=True)
+        with st.expander("AQI & pollutants", expanded=False):
             aqi_lo, aqi_hi = float(df["aqi"].min()), float(df["aqi"].max())
             if aqi_lo == aqi_hi:
-                # Un slider Streamlit exige min < max : on élargit artificiellement
+                # A Streamlit slider requires min < max: we artificially widen the range
                 aqi_lo, aqi_hi = aqi_lo - 0.5, aqi_hi + 0.5
             aqi_min, aqi_max = st.slider("AQI Range", min_value=aqi_lo, max_value=aqi_hi, value=(aqi_lo, aqi_hi))
 
             selected_pollutants = st.multiselect(
-                "Polluants à afficher", POLLUTANTS, default=["pm2_5", "pm10", "no2", "o3"]
+                "Pollutants to display", POLLUTANTS, default=["pm2_5", "pm10", "no2", "o3"]
             )
 
     filtered = df[df["city_name"].isin(selected_cities)]
@@ -551,17 +553,17 @@ with st.sidebar:
 
     if not filtered.empty:
         with st.container(border=True):
-            st.markdown('<div class="sidebar-card-label">Aperçu filtré</div>', unsafe_allow_html=True)
+            st.markdown('<div class="sidebar-card-label">Filtered overview</div>', unsafe_allow_html=True)
             s1, s2 = st.columns(2)
             with s1:
                 st.markdown(
-                    f"""<div class="stat-mini"><div class="stat-label">Mesures</div>
+                    f"""<div class="stat-mini"><div class="stat-label">Readings</div>
                     <div class="stat-value">{len(filtered):,}</div></div>""",
                     unsafe_allow_html=True,
                 )
             with s2:
                 st.markdown(
-                    f"""<div class="stat-mini"><div class="stat-label">Villes</div>
+                    f"""<div class="stat-mini"><div class="stat-label">Cities</div>
                     <div class="stat-value">{filtered['city_name'].nunique()}</div></div>""",
                     unsafe_allow_html=True,
                 )
@@ -572,14 +574,14 @@ with st.sidebar:
             with s3:
                 st.markdown(
                     f"""<div class="stat-mini" style="border-left:2px solid {avg_c};">
-                    <div class="stat-label">AQI moyen</div>
+                    <div class="stat-label">Avg AQI</div>
                     <div class="stat-value" style="color:{avg_c};">{filtered['aqi'].mean():.2f}</div></div>""",
                     unsafe_allow_html=True,
                 )
             with s4:
                 st.markdown(
                     f"""<div class="stat-mini" style="border-left:2px solid {max_c};">
-                    <div class="stat-label">AQI max</div>
+                    <div class="stat-label">Max AQI</div>
                     <div class="stat-value" style="color:{max_c};">{filtered['aqi'].max():.2f}</div></div>""",
                     unsafe_allow_html=True,
                 )
@@ -588,33 +590,33 @@ with st.sidebar:
     st.markdown(
         f"""
         <div class="sidebar-footnote">
-            <div><span class="live-dot"></span>Warehouse connecté</div>
-            <div>{len(df):,} lignes · {df['city_name'].nunique()} villes</div>
-            <div>Dernière ingestion : {last_update.strftime('%d/%m/%Y %H:%M')} UTC</div>
+            <div><span class="live-dot"></span>Warehouse connected</div>
+            <div>{len(df):,} rows · {df['city_name'].nunique()} cities</div>
+            <div>Last ingestion: {last_update.strftime('%d/%m/%Y %H:%M')} UTC</div>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
 if filtered.empty:
-    st.warning("Aucune donnée ne correspond aux filtres sélectionnés.")
+    st.warning("No data matches the selected filters.")
     st.stop()
 
-# ---------- Métriques principales ----------
-st.markdown('<div class="section-label">Vue d\'ensemble</div>', unsafe_allow_html=True)
+# ---------- Key metrics ----------
+st.markdown('<div class="section-label">Overview</div>', unsafe_allow_html=True)
 
 col1, col2, col3, col4, col5 = st.columns(5)
 
 with col1:
     st.markdown(
-        f"""<div class="metric-card"><div class="label">Total mesures</div>
+        f"""<div class="metric-card"><div class="label">Total readings</div>
         <div class="value">{len(filtered):,}</div></div>""",
         unsafe_allow_html=True,
     )
 
 with col2:
     st.markdown(
-        f"""<div class="metric-card"><div class="label">Villes</div>
+        f"""<div class="metric-card"><div class="label">Cities</div>
         <div class="value">{filtered['city_name'].nunique()}</div></div>""",
         unsafe_allow_html=True,
     )
@@ -624,7 +626,7 @@ with col3:
     color = get_aqi_color(avg_aqi)
     st.markdown(
         f"""<div class="metric-card" style="border-left-color: {color};">
-        <div class="label">AQI moyen</div>
+        <div class="label">Avg AQI</div>
         <div class="value" style="color: {color};">{avg_aqi:.2f}</div></div>""",
         unsafe_allow_html=True,
     )
@@ -634,7 +636,7 @@ with col4:
     color = get_aqi_color(max_aqi)
     st.markdown(
         f"""<div class="metric-card" style="border-left-color: {color};">
-        <div class="label">AQI max</div>
+        <div class="label">Max AQI</div>
         <div class="value" style="color: {color};">{max_aqi:.2f}</div></div>""",
         unsafe_allow_html=True,
     )
@@ -645,7 +647,7 @@ with col5:
     color = get_aqi_color(best_aqi)
     st.markdown(
         f"""<div class="metric-card" style="border-left-color: {color};">
-        <div class="label">Meilleure ville</div>
+        <div class="label">Best city</div>
         <div class="value" style="font-size: 1.15rem;">{best_city}</div>
         <div class="change">AQI {best_aqi:.2f}</div></div>""",
         unsafe_allow_html=True,
@@ -655,14 +657,14 @@ st.markdown("---")
 
 # ---------- Tabs ----------
 tab1, tab2, tab3, tab4, tab5 = st.tabs(
-    ["Overview", "Villes", "Tendances", "Corrélations", "Données"]
+    ["Overview", "Cities", "Trends", "Correlations", "Data"]
 )
 
 with tab1:
     col1, col2 = st.columns([2, 1])
 
     with col1:
-        st.markdown('<div class="section-label">Carte des villes</div>', unsafe_allow_html=True)
+        st.markdown('<div class="section-label">City map</div>', unsafe_allow_html=True)
         city_points = filtered.dropna(subset=["latitude", "longitude"]).drop_duplicates("city_name")[
             ["city_name", "latitude", "longitude"]
         ]
@@ -670,7 +672,7 @@ with tab1:
         city_points = city_points.merge(city_avg, on="city_name")
 
         if city_points.empty:
-            st.info("Aucune coordonnée géographique disponible pour les villes sélectionnées.")
+            st.info("No geographic coordinates available for the selected cities.")
         else:
             fig_map = px.scatter_geo(
                 city_points, lat="latitude", lon="longitude", hover_name="city_name",
@@ -681,7 +683,7 @@ with tab1:
             st.plotly_chart(fig_map, use_container_width=True)
 
     with col2:
-        st.markdown('<div class="section-label">Distribution AQI</div>', unsafe_allow_html=True)
+        st.markdown('<div class="section-label">AQI distribution</div>', unsafe_allow_html=True)
         aqi_dist = filtered["aqi_label"].value_counts().reset_index()
         aqi_dist.columns = ["Category", "Count"]
 
@@ -692,7 +694,7 @@ with tab1:
         fig_pie.update_layout(height=280, margin=dict(l=0, r=0, t=10, b=0))
         st.plotly_chart(fig_pie, use_container_width=True)
 
-        st.markdown('<div class="section-label">Top 5 villes les plus propres</div>', unsafe_allow_html=True)
+        st.markdown('<div class="section-label">Top 5 cleanest cities</div>', unsafe_allow_html=True)
         best_cities = filtered.groupby("city_name")["aqi"].mean().sort_values().head(5)
         for city, aqi in best_cities.items():
             st.markdown(
@@ -702,19 +704,19 @@ with tab1:
             )
 
 with tab2:
-    st.markdown('<div class="section-label">Comparaison des villes</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-label">City comparison</div>', unsafe_allow_html=True)
 
     city_stats = filtered.groupby("city_name").agg(
         {"aqi": ["mean", "min", "max", "std"], "timestamp_utc": "count"}
     ).round(2)
-    city_stats.columns = ["AQI moyen", "AQI min", "AQI max", "Écart-type", "Mesures"]
-    city_stats = city_stats.sort_values("AQI moyen")
+    city_stats.columns = ["Avg AQI", "Min AQI", "Max AQI", "Std dev", "Readings"]
+    city_stats = city_stats.sort_values("Avg AQI")
 
     st.dataframe(city_stats, use_container_width=True)
 
     fig_city_bar = px.bar(
-        city_stats.reset_index(), x="city_name", y="AQI moyen",
-        color="AQI moyen", color_continuous_scale="RdYlGn_r",
+        city_stats.reset_index(), x="city_name", y="Avg AQI",
+        color="Avg AQI", color_continuous_scale="RdYlGn_r",
     )
     st.plotly_chart(fig_city_bar, use_container_width=True)
 
@@ -722,10 +724,10 @@ with tab2:
     st.plotly_chart(fig_box, use_container_width=True)
 
 with tab3:
-    st.markdown('<div class="section-label">Évolution temporelle</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-label">Time trends</div>', unsafe_allow_html=True)
 
     trend_cities = st.multiselect(
-        "Villes pour les tendances", selected_cities,
+        "Cities for trends", selected_cities,
         default=selected_cities[:3] if len(selected_cities) > 3 else selected_cities,
     )
 
@@ -742,30 +744,30 @@ with tab3:
         fig_trend.update_layout(height=380)
         st.plotly_chart(fig_trend, use_container_width=True)
 
-        st.markdown('<div class="section-label">Profil horaire</div>', unsafe_allow_html=True)
+        st.markdown('<div class="section-label">Hourly profile</div>', unsafe_allow_html=True)
         hourly_pivot = trend_data.pivot_table(index="hour", columns="city_name", values="aqi", aggfunc="mean")
         fig_heatmap = px.imshow(
-            hourly_pivot, labels=dict(x="Ville", y="Heure", color="AQI"),
+            hourly_pivot, labels=dict(x="City", y="Hour", color="AQI"),
             color_continuous_scale="RdYlGn_r",
         )
         fig_heatmap.update_layout(height=380)
         st.plotly_chart(fig_heatmap, use_container_width=True)
 
-        st.markdown('<div class="section-label">Semaine vs Week-end</div>', unsafe_allow_html=True)
+        st.markdown('<div class="section-label">Weekday vs Weekend</div>', unsafe_allow_html=True)
         wk = trend_data.groupby(["city_name", "is_weekend"])["aqi"].mean().reset_index()
-        wk["period"] = wk["is_weekend"].map({True: "Week-end", False: "Semaine", 1: "Week-end", 0: "Semaine"})
+        wk["period"] = wk["is_weekend"].map({True: "Weekend", False: "Weekday", 1: "Weekend", 0: "Weekday"})
 
         fig_wk = px.bar(wk, x="city_name", y="aqi", color="period", barmode="group")
         st.plotly_chart(fig_wk, use_container_width=True)
     else:
-        st.info("Sélectionnez au moins une ville pour voir les tendances.")
+        st.info("Select at least one city to see the trends.")
 
 with tab4:
-    st.markdown('<div class="section-label">Corrélations entre polluants</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-label">Pollutant correlations</div>', unsafe_allow_html=True)
 
     variables = ["aqi"] + POLLUTANTS
     corr_pollutants = st.multiselect(
-        "Polluants pour la matrice de corrélation", variables,
+        "Pollutants for the correlation matrix", variables,
         default=["aqi", "pm2_5", "pm10", "no2", "o3", "co"],
     )
 
@@ -777,25 +779,25 @@ with tab4:
         fig_corr.update_layout(height=480)
         st.plotly_chart(fig_corr, use_container_width=True)
 
-        st.markdown('<div class="section-label">Analyse bivariée</div>', unsafe_allow_html=True)
+        st.markdown('<div class="section-label">Bivariate analysis</div>', unsafe_allow_html=True)
         col1, col2 = st.columns(2)
         with col1:
-            x_var = st.selectbox("Variable X", variables, index=0)
+            x_var = st.selectbox("X variable", variables, index=0)
         with col2:
             default_idx = min(5, len(variables) - 1)
-            y_var = st.selectbox("Variable Y", variables, index=default_idx)
+            y_var = st.selectbox("Y variable", variables, index=default_idx)
 
         fig_scatter = px.scatter(
             filtered, x=x_var, y=y_var, color="city_name", opacity=0.55, trendline="ols",
         )
         st.plotly_chart(fig_scatter, use_container_width=True)
     else:
-        st.info("Sélectionnez au moins 2 polluants pour voir les corrélations.")
+        st.info("Select at least 2 pollutants to see the correlations.")
 
 with tab5:
-    st.markdown('<div class="section-label">Données brutes</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-label">Raw data</div>', unsafe_allow_html=True)
 
-    page_size = st.selectbox("Lignes par page", [10, 25, 50, 100], index=1)
+    page_size = st.selectbox("Rows per page", [10, 25, 50, 100], index=1)
     total_rows = len(filtered)
     total_pages = max(1, (total_rows - 1) // page_size + 1)
 
@@ -810,7 +812,7 @@ with tab5:
 
     csv = filtered[display_cols].to_csv(index=False).encode("utf-8")
     st.download_button(
-        label="Télécharger (CSV)", data=csv,
+        label="Download (CSV)", data=csv,
         file_name=f"aqi_data_{datetime.now().strftime('%Y%m%d')}.csv", mime="text/csv",
     )
 
@@ -818,8 +820,8 @@ with tab5:
 st.markdown(
     f"""
     <div class="footer">
-        AQI DATA WAREHOUSE — {len(df):,} LIGNES TOTALES · {df['city_name'].nunique()} VILLES ·
-        DERNIÈRE MESURE {df["timestamp_utc"].max().strftime('%d/%m/%Y %H:%M')} UTC ·
+        AQI DATA WAREHOUSE — {len(df):,} TOTAL ROWS · {df['city_name'].nunique()} CITIES ·
+        LATEST READING {df["timestamp_utc"].max().strftime('%d/%m/%Y %H:%M')} UTC ·
         POWERED BY OPENWEATHERMAP / AIRFLOW / POSTGRES
     </div>
     """,
