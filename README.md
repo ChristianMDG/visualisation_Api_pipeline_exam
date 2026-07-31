@@ -293,7 +293,7 @@ ORDER BY t.date DESC, avg_aqi DESC;
 ## 8. Links & Resources {#links}
 
 ### 📊 Deployed Dashboard
-- **URL**: [https://visualisationapipipelineexam-d3xfoonxl7gzkekwntej96.streamlit.app]
+- **URL**: [https://visualisationapipipelineexam-d3xfoonxl7gzkekwntej96.streamlit.app](https://visualisationapipipelineexam-d3xfoonxl7gzkekwntej96.streamlit.app)
 
 ### 📁 Source Code
 - **Repository**: `https://github.com/ChristianMDG/visualisation_Api_pipeline_exam.git`
