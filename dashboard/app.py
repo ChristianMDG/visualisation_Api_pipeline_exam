@@ -7,11 +7,10 @@ Air quality monitoring console: robust connection to the PostgreSQL warehouse
 """
 import os
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from dotenv import load_dotenv, find_dotenv
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
 import streamlit as st
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
@@ -414,8 +413,7 @@ def load_data():
                 return df, None, False
 
             truncated = len(df) > SAFETY_ROW_CAP
-            if truncated:
-                df = df.iloc[:SAFETY_ROW_CAP]
+            if truncated:                df = df.iloc[:SAFETY_ROW_CAP]
 
             df["timestamp_utc"] = pd.to_datetime(df["timestamp_utc"], utc=True)
             df["aqi_label"] = df["aqi"].map(AQI_LABELS)
@@ -467,7 +465,7 @@ df, load_error, truncated = load_data()
 st.markdown(
     """
     <div class="app-header">
-        <div class="eyebrow">DataGreen · MangaRivotra</div>
+        <div class="eyebrow">DashBoard AQI </div>
         <h1>AQI Data Warehouse</h1>
         <p>Air quality monitoring — Airflow pipeline / Postgres warehouse</p>
     </div>
@@ -503,7 +501,7 @@ with st.sidebar:
         <div class="sidebar-brand">
             <div class="dot"></div>
             <div class="brand-text">
-                <div class="brand-title">DATAGREEN</div>
+                <div class="brand-title">DASHBOARD</div>
                 <div class="brand-sub">AQI Warehouse Console</div>
             </div>
         </div>
