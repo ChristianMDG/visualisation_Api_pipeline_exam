@@ -316,8 +316,8 @@ ORDER BY t.date DESC, avg_aqi DESC;
 
 | Feature | Specification |
 |---------|---------------|
-| Data period | Last 30 days (configurable) |
-| Query limit | 50,000 rows |
+| Data period |None |
+| Query limit | 1 000 000 rows |
 | Cache TTL | 10 minutes |
 | Update frequency | Real-time (on query) |
 | Load time | 2-5 seconds |
