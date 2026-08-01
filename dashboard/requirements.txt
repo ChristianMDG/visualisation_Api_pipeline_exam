@@ -5,3 +5,4 @@ plotly
 sqlalchemy
 python-dotenv
 psycopg2-binary
+statsmodels

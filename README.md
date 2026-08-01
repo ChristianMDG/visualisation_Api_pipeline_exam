@@ -189,7 +189,7 @@ DATABASE_URL = "postgresql://username:password@host.neon.tech/neondb?sslmode=req
 - Click "Deploy"
 
 **4. Access Dashboard**
-- URL: `https://visualisationapipipelineexam-d3xfoonxl7gzkekwntej96.streamlit.app`
+- URL: [https://visualisationapipipelineexam-d3xfoonxl7gzkekwntej96.streamlit.app](https://visualisationapipipelineexam-d3xfoonxl7gzkekwntej96.streamlit.app)
 
 ---
 
