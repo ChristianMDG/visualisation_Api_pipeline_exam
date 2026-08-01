@@ -3,16 +3,18 @@ AQI Data Warehouse — Interactive Dashboard (Streamlit)
 
 Air quality monitoring console: robust connection to the PostgreSQL warehouse
 (Neon), tab-based navigation, advanced filters, dark technical design
-(Inter + JetBrains Mono).
+(Inter + JetBrains Mono). Mirrors the exploratory analysis notebook.
 """
 import os
 import time
 from datetime import datetime, timedelta
 from dotenv import load_dotenv, find_dotenv
+import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
+from scipy.stats import norm, pearsonr
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -50,6 +52,13 @@ CUSTOM_CSS = """
         --text: #e6e8eb;
         --text-muted: #868d9a;
         --accent: #5b8def;
+        --accent-dim: rgba(91, 141, 239, 0.12);
+        --good: #22c55e;
+        --fair: #84cc16;
+        --moderate: #eab308;
+        --poor: #f97316;
+        --very-poor: #ef4444;
+        --radius: 8px;
     }
 
     html, body, [class*="css"] { font-family: 'Inter', -apple-system, sans-serif; }
@@ -165,8 +174,12 @@ CUSTOM_CSS = """
         font-family: 'JetBrains Mono', monospace;
         font-size: 0.8rem;
         color: var(--text-muted);
+        padding: 0.5rem 1rem;
     }
-    .stTabs [aria-selected="true"] { color: var(--accent) !important; }
+    .stTabs [aria-selected="true"] { 
+        color: var(--accent) !important;
+        border-bottom: 2px solid var(--accent);
+    }
 
     /* Native Streamlit dataframes / metrics */
     [data-testid="stMetricValue"] { font-family: 'JetBrains Mono', monospace; }
@@ -179,33 +192,37 @@ CUSTOM_CSS = """
         color: var(--text-muted);
         font-family: 'JetBrains Mono', monospace;
         font-size: 0.72rem;
+        text-align: center;
     }
 
-    /* ===== Sidebar ===== */
+    /* ===== SIDEBAR ===== */
     section[data-testid="stSidebar"] {
         background: var(--surface);
         border-right: 1px solid var(--border);
+        min-width: 280px;
     }
     section[data-testid="stSidebar"] > div { padding-top: 0.5rem; }
 
+    /* Brand */
     .sidebar-brand {
         display: flex;
         align-items: center;
-        gap: 0.5rem;
-        padding-bottom: 1rem;
-        margin-bottom: 1.1rem;
+        gap: 0.65rem;
+        padding: 0 0 1.25rem 0;
+        margin-bottom: 1.25rem;
         border-bottom: 1px solid var(--border);
     }
     .sidebar-brand .dot {
-        width: 8px; height: 8px; border-radius: 50%;
+        width: 10px; height: 10px;
+        border-radius: 50%;
         background: var(--accent);
-        box-shadow: 0 0 8px var(--accent);
+        box-shadow: 0 0 12px var(--accent);
         flex-shrink: 0;
     }
     .sidebar-brand .brand-text { display: flex; flex-direction: column; line-height: 1.2; }
     .sidebar-brand .brand-title {
         font-family: 'JetBrains Mono', monospace;
-        font-size: 0.78rem;
+        font-size: 0.85rem;
         font-weight: 600;
         color: var(--text);
         letter-spacing: 0.02em;
@@ -215,116 +232,170 @@ CUSTOM_CSS = """
         color: var(--text-muted);
     }
 
-    /* Native st.container(border=True) cards in the sidebar */
-    section[data-testid="stSidebar"] [data-testid="stVerticalBlockBorderWrapper"] {
+    /* Filter sections */
+    .filter-section {
         background: var(--bg);
-        border: 1px solid var(--border) !important;
-        border-radius: 8px;
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 0.85rem 1rem;
         margin-bottom: 0.85rem;
+        transition: border-color 0.2s ease;
     }
-    section[data-testid="stSidebar"] [data-testid="stVerticalBlockBorderWrapper"] > div {
-        padding: 0.9rem 0.95rem;
+    .filter-section:hover {
+        border-color: var(--accent);
     }
-
-    .sidebar-card-label {
+    .filter-section .filter-label {
         font-family: 'JetBrains Mono', monospace;
-        font-size: 0.66rem;
+        font-size: 0.6rem;
         letter-spacing: 0.1em;
         text-transform: uppercase;
         color: var(--text-muted);
-        margin-bottom: 0.65rem;
+        margin-bottom: 0.6rem;
         display: flex;
         align-items: center;
         gap: 0.4rem;
     }
-    .sidebar-card-label::before {
-        content: "";
-        width: 3px; height: 12px;
-        background: var(--accent);
-        border-radius: 2px;
-        display: inline-block;
+    .filter-section .filter-label .icon {
+        font-size: 0.85rem;
+    }
+    .filter-section .filter-label .badge-count {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 0.55rem;
+        background: var(--accent-dim);
+        color: var(--accent);
+        padding: 0.1rem 0.5rem;
+        border-radius: 10px;
+        margin-left: auto;
     }
 
-    /* Widgets: multiselect, selectbox, date input */
+    /* Active filter indicator */
+    .filter-active {
+        border-left: 2px solid var(--accent);
+        padding-left: 0.75rem;
+    }
+
+    /* Quick stats row in sidebar */
+    .sidebar-stats {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 0.5rem;
+        margin-top: 0.25rem;
+    }
+    .sidebar-stat {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        padding: 0.4rem 0.6rem;
+        text-align: center;
+    }
+    .sidebar-stat .stat-num {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 1.1rem;
+        font-weight: 600;
+        color: var(--text);
+    }
+    .sidebar-stat .stat-label {
+        font-size: 0.55rem;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--text-muted);
+    }
+
+    /* Status bar at bottom of sidebar */
+    .sidebar-status {
+        border-top: 1px solid var(--border);
+        padding-top: 0.85rem;
+        margin-top: 0.5rem;
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 0.6rem;
+        color: var(--text-muted);
+        line-height: 1.6;
+    }
+    .sidebar-status .status-dot {
+        display: inline-block;
+        width: 6px; height: 6px;
+        border-radius: 50%;
+        background: #22c55e;
+        margin-right: 0.4rem;
+        box-shadow: 0 0 8px #22c55e;
+    }
+    .sidebar-status .status-row {
+        display: flex;
+        justify-content: space-between;
+        padding: 0.15rem 0;
+    }
+
+    /* Widget overrides */
     section[data-testid="stSidebar"] [data-baseweb="select"] > div,
-    section[data-testid="stSidebar"] input {
+    section[data-testid="stSidebar"] input,
+    section[data-testid="stSidebar"] [data-baseweb="input"] input {
         background: var(--surface) !important;
         border-color: var(--border) !important;
         color: var(--text) !important;
         font-family: 'Inter', sans-serif;
-        font-size: 0.85rem;
+        font-size: 0.82rem;
+        border-radius: 4px;
+    }
+    section[data-testid="stSidebar"] [data-baseweb="select"]:focus-within,
+    section[data-testid="stSidebar"] input:focus {
+        border-color: var(--accent) !important;
+        box-shadow: 0 0 0 2px var(--accent-dim) !important;
     }
     section[data-testid="stSidebar"] [data-baseweb="tag"] {
-        background: rgba(91, 141, 239, 0.18) !important;
+        background: var(--accent-dim) !important;
         border: 1px solid var(--accent) !important;
+        border-radius: 3px;
     }
-    section[data-testid="stSidebar"] [data-baseweb="tag"] span { color: var(--text) !important; }
+    section[data-testid="stSidebar"] [data-baseweb="tag"] span { 
+        color: var(--text) !important;
+        font-size: 0.75rem;
+    }
 
     /* Slider */
     section[data-testid="stSidebar"] [data-testid="stSlider"] div[role="slider"] {
         background-color: var(--accent) !important;
-        box-shadow: 0 0 0 4px rgba(91, 141, 239, 0.18);
+        box-shadow: 0 0 0 4px var(--accent-dim);
+    }
+    section[data-testid="stSidebar"] [data-testid="stSlider"] div[role="slider"]:hover {
+        box-shadow: 0 0 0 6px var(--accent-dim);
     }
 
     /* Expander */
     section[data-testid="stSidebar"] [data-testid="stExpander"] {
         background: var(--bg);
         border: 1px solid var(--border);
-        border-radius: 8px;
+        border-radius: var(--radius);
     }
     section[data-testid="stSidebar"] summary {
         font-family: 'JetBrains Mono', monospace;
-        font-size: 0.75rem;
+        font-size: 0.72rem;
         color: var(--text-muted);
+        padding: 0.25rem 0;
     }
-
-    /* Mini stats grid */
-    .stat-mini {
-        background: var(--surface);
-        border: 1px solid var(--border);
-        border-radius: 6px;
-        padding: 0.55rem 0.65rem;
-    }
-    .stat-mini .stat-label {
-        font-family: 'JetBrains Mono', monospace;
-        font-size: 0.6rem;
-        letter-spacing: 0.06em;
-        text-transform: uppercase;
-        color: var(--text-muted);
-    }
-    .stat-mini .stat-value {
-        font-family: 'JetBrains Mono', monospace;
-        font-size: 1.05rem;
-        font-weight: 600;
+    section[data-testid="stSidebar"] summary:hover {
         color: var(--text);
-        margin-top: 0.15rem;
     }
 
-    .sidebar-footnote {
-        font-family: 'JetBrains Mono', monospace;
-        font-size: 0.65rem;
-        color: var(--text-muted);
-        line-height: 1.5;
-        padding: 0.6rem 0.1rem 0 0.1rem;
-    }
-    .sidebar-footnote .live-dot {
-        display: inline-block;
-        width: 6px; height: 6px;
-        border-radius: 50%;
-        background: #22c55e;
-        margin-right: 0.35rem;
-        box-shadow: 0 0 6px #22c55e;
+    /* Date inputs */
+    section[data-testid="stSidebar"] [data-testid="stDateInput"] input {
+        font-size: 0.78rem;
+        padding: 0.4rem 0.5rem;
     }
 
-    /* Sidebar scrollbar */
-    section[data-testid="stSidebar"] ::-webkit-scrollbar { width: 6px; }
+    /* Scrollbar */
+    section[data-testid="stSidebar"] ::-webkit-scrollbar { width: 4px; }
     section[data-testid="stSidebar"] ::-webkit-scrollbar-thumb {
-        background: var(--border); border-radius: 3px;
+        background: var(--border); border-radius: 2px;
+    }
+    section[data-testid="stSidebar"] ::-webkit-scrollbar-thumb:hover {
+        background: var(--accent);
     }
 
     @media (max-width: 768px) {
         .app-header h1 { font-size: 1.3rem; }
         .metric-card .value { font-size: 1.3rem; }
+        section[data-testid="stSidebar"] { min-width: 240px; }
+        .sidebar-stats { grid-template-columns: 1fr 1fr; }
     }
 </style>
 """
@@ -372,20 +443,11 @@ def get_engine():
 
 
 # ---------- Data loading ----------
-# IMPORTANT: no date window or LIMIT on the SQL side by default -> we load
-# the ENTIRE warehouse. Filtering by period happens afterwards on the
-# sidebar (client) side. A safety cap (SAFETY_ROW_CAP) just guards against
-# a runaway query if the pipeline has been running for a very long time.
 SAFETY_ROW_CAP = 100_000
 
 
 @st.cache_data(ttl=600, show_spinner="Loading warehouse data...")
 def load_data():
-    """
-    Loads ALL rows from the warehouse, with retry on transient errors.
-    Returns (df, error_message, truncated). error_message is None if everything is fine.
-    truncated is True if the safety cap was reached.
-    """
     engine = get_engine()
     if engine is None:
         return None, "DATABASE_URL not found (neither in st.secrets nor in .env).", False
@@ -424,9 +486,9 @@ def load_data():
         except SQLAlchemyError as e:
             last_error = str(e)
             if "SSL" in last_error or "closed" in last_error or "timeout" in last_error.lower():
-                time.sleep(2 * (attempt + 1))  # progressive backoff
+                time.sleep(2 * (attempt + 1))
                 continue
-            break  # non-transient error (e.g. invalid SQL) -> no point retrying
+            break
         except Exception as e:
             last_error = str(e)
             time.sleep(2 * (attempt + 1))
@@ -446,17 +508,6 @@ def get_aqi_color(aqi_value: float) -> str:
     elif aqi_value <= 4:
         return AQI_COLORS["Poor"]
     return AQI_COLORS["Very Poor"]
-
-
-def get_aqi_badge(aqi_label: str) -> str:
-    classes = {
-        "Good": "aqi-good",
-        "Fair": "aqi-fair",
-        "Moderate": "aqi-moderate",
-        "Poor": "aqi-poor",
-        "Very Poor": "aqi-very-poor",
-    }
-    return f'<span class="aqi-badge {classes.get(aqi_label, "")}">{aqi_label}</span>'
 
 
 # ---------- Application ----------
@@ -496,7 +547,7 @@ if truncated:
         "Narrow the period in the sidebar if you want to refine the results."
     )
 
-# ---------- Sidebar ----------
+# ---------- SIDEBAR (completely redesigned) ----------
 with st.sidebar:
     st.markdown(
         """
@@ -515,87 +566,160 @@ with st.sidebar:
     date_min = df["timestamp_utc"].min().date()
     date_max = df["timestamp_utc"].max().date()
 
-    with st.container(border=True):
-        st.markdown('<div class="sidebar-card-label">Cities</div>', unsafe_allow_html=True)
-        selected_cities = st.multiselect(
-            "Cities", cities, default=cities, label_visibility="collapsed",
-            help="Select the cities to display",
+    # === FILTER 1: Cities ===
+    st.markdown(
+        f"""
+        <div class="filter-section">
+            <div class="filter-label">
+                <span class="icon">🏙️</span> Cities
+                <span class="badge-count">{len(df['city_name'].unique())} available</span>
+            </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    selected_cities = st.multiselect(
+        "Select cities to display",
+        cities,
+        default=cities,
+        label_visibility="collapsed",
+        help="Filter data by one or more cities",
+    )
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    # === FILTER 2: Period ===
+    st.markdown(
+        f"""
+        <div class="filter-section">
+            <div class="filter-label">
+                <span class="icon">📅</span> Period
+                <span class="badge-count">{date_min} → {date_max}</span>
+            </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    col1, col2 = st.columns(2)
+    with col1:
+        start_date = st.date_input("From", date_min, min_value=date_min, max_value=date_max, label_visibility="collapsed")
+    with col2:
+        end_date = st.date_input("To", date_max, min_value=date_min, max_value=date_max, label_visibility="collapsed")
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    # === FILTER 3: AQI Range ===
+    aqi_lo, aqi_hi = float(df["aqi"].min()), float(df["aqi"].max())
+    if aqi_lo == aqi_hi:
+        aqi_lo, aqi_hi = aqi_lo - 0.5, aqi_hi + 0.5
+
+    st.markdown(
+        f"""
+        <div class="filter-section">
+            <div class="filter-label">
+                <span class="icon">📊</span> AQI Range
+                <span class="badge-count">{aqi_lo:.1f} – {aqi_hi:.1f}</span>
+            </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    aqi_min, aqi_max = st.slider(
+        "Select AQI range",
+        min_value=aqi_lo,
+        max_value=aqi_hi,
+        value=(aqi_lo, aqi_hi),
+        label_visibility="collapsed",
+        help="Filter readings by AQI value",
+    )
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    # === FILTER 4: Pollutants (collapsible) ===
+    st.markdown(
+        f"""
+        <div class="filter-section">
+            <div class="filter-label">
+                <span class="icon">🧪</span> Pollutants
+                <span class="badge-count">{len(POLLUTANTS)} available</span>
+            </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    with st.expander("Select pollutants to display", expanded=False):
+        selected_pollutants = st.multiselect(
+            "Pollutants",
+            POLLUTANTS,
+            default=["pm2_5", "pm10", "no2", "o3"],
+            label_visibility="collapsed",
+            help="Choose which pollutants to include in tables and charts",
         )
+    st.markdown('</div>', unsafe_allow_html=True)
 
-    with st.container(border=True):
-        st.markdown('<div class="sidebar-card-label">Period</div>', unsafe_allow_html=True)
-        col1, col2 = st.columns(2)
-        with col1:
-            start_date = st.date_input("Start", date_min, min_value=date_min, max_value=date_max)
-        with col2:
-            end_date = st.date_input("End", date_max, min_value=date_min, max_value=date_max)
-
-    with st.container(border=True):
-        st.markdown('<div class="sidebar-card-label">Advanced filters</div>', unsafe_allow_html=True)
-        with st.expander("AQI & pollutants", expanded=False):
-            aqi_lo, aqi_hi = float(df["aqi"].min()), float(df["aqi"].max())
-            if aqi_lo == aqi_hi:
-                # A Streamlit slider requires min < max: we artificially widen the range
-                aqi_lo, aqi_hi = aqi_lo - 0.5, aqi_hi + 0.5
-            aqi_min, aqi_max = st.slider("AQI Range", min_value=aqi_lo, max_value=aqi_hi, value=(aqi_lo, aqi_hi))
-
-            selected_pollutants = st.multiselect(
-                "Pollutants to display", POLLUTANTS, default=["pm2_5", "pm10", "no2", "o3"]
-            )
-
+    # === Apply filters ===
     filtered = df[df["city_name"].isin(selected_cities)]
     filtered = filtered[
-        (filtered["timestamp_utc"].dt.date >= start_date) & (filtered["timestamp_utc"].dt.date <= end_date)
+        (filtered["timestamp_utc"].dt.date >= start_date) & 
+        (filtered["timestamp_utc"].dt.date <= end_date)
     ]
     filtered = filtered[(filtered["aqi"] >= aqi_min) & (filtered["aqi"] <= aqi_max)]
 
+    # === SIDEBAR: Quick stats (compact) ===
     if not filtered.empty:
-        with st.container(border=True):
-            st.markdown('<div class="sidebar-card-label">Filtered overview</div>', unsafe_allow_html=True)
-            s1, s2 = st.columns(2)
-            with s1:
-                st.markdown(
-                    f"""<div class="stat-mini"><div class="stat-label">Readings</div>
-                    <div class="stat-value">{len(filtered):,}</div></div>""",
-                    unsafe_allow_html=True,
-                )
-            with s2:
-                st.markdown(
-                    f"""<div class="stat-mini"><div class="stat-label">Cities</div>
-                    <div class="stat-value">{filtered['city_name'].nunique()}</div></div>""",
-                    unsafe_allow_html=True,
-                )
-            st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
-            s3, s4 = st.columns(2)
-            avg_c = get_aqi_color(filtered["aqi"].mean())
-            max_c = get_aqi_color(filtered["aqi"].max())
-            with s3:
-                st.markdown(
-                    f"""<div class="stat-mini" style="border-left:2px solid {avg_c};">
-                    <div class="stat-label">Avg AQI</div>
-                    <div class="stat-value" style="color:{avg_c};">{filtered['aqi'].mean():.2f}</div></div>""",
-                    unsafe_allow_html=True,
-                )
-            with s4:
-                st.markdown(
-                    f"""<div class="stat-mini" style="border-left:2px solid {max_c};">
-                    <div class="stat-label">Max AQI</div>
-                    <div class="stat-value" style="color:{max_c};">{filtered['aqi'].max():.2f}</div></div>""",
-                    unsafe_allow_html=True,
-                )
+        avg_aqi = filtered["aqi"].mean()
+        max_aqi = filtered["aqi"].max()
+        avg_color = get_aqi_color(avg_aqi)
+        max_color = get_aqi_color(max_aqi)
 
+        st.markdown(
+            f"""
+            <div style="background:var(--bg); border:1px solid var(--border); border-radius:8px; padding:0.85rem 1rem; margin-top:0.25rem;">
+                <div style="font-family:'JetBrains Mono',monospace; font-size:0.6rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--text-muted); margin-bottom:0.6rem;">
+                    ⚡ Quick stats
+                </div>
+                <div class="sidebar-stats">
+                    <div class="sidebar-stat">
+                        <div class="stat-num">{len(filtered):,}</div>
+                        <div class="stat-label">Readings</div>
+                    </div>
+                    <div class="sidebar-stat">
+                        <div class="stat-num">{filtered['city_name'].nunique()}</div>
+                        <div class="stat-label">Cities</div>
+                    </div>
+                    <div class="sidebar-stat" style="border-left:2px solid {avg_color};">
+                        <div class="stat-num" style="color:{avg_color};">{avg_aqi:.2f}</div>
+                        <div class="stat-label">Avg AQI</div>
+                    </div>
+                    <div class="sidebar-stat" style="border-left:2px solid {max_color};">
+                        <div class="stat-num" style="color:{max_color};">{max_aqi:.2f}</div>
+                        <div class="stat-label">Max AQI</div>
+                    </div>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    # === SIDEBAR: Status bar ===
     last_update = df["timestamp_utc"].max()
+    total_rows = len(df)
+    total_cities = df["city_name"].nunique()
+
     st.markdown(
         f"""
-        <div class="sidebar-footnote">
-            <div><span class="live-dot"></span>Warehouse connected</div>
-            <div>{len(df):,} rows · {df['city_name'].nunique()} cities</div>
-            <div>Last ingestion: {last_update.strftime('%d/%m/%Y %H:%M')} UTC</div>
+        <div class="sidebar-status">
+            <div class="status-row">
+                <span><span class="status-dot"></span>Warehouse online</span>
+                <span>{total_rows:,} rows</span>
+            </div>
+            <div class="status-row">
+                <span>🌍 {total_cities} cities</span>
+                <span>📡 {last_update.strftime('%d/%m/%Y %H:%M')} UTC</span>
+            </div>
+            <div class="status-row" style="color:var(--accent); font-size:0.55rem; margin-top:0.2rem;">
+                <span>◆ {start_date} → {end_date}</span>
+                <span>{len(selected_cities)}/{total_cities} cities</span>
+            </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
+# ---------- Check filtered data ----------
 if filtered.empty:
     st.warning("No data matches the selected filters.")
     st.stop()
@@ -645,7 +769,7 @@ with col5:
     color = get_aqi_color(best_aqi)
     st.markdown(
         f"""<div class="metric-card" style="border-left-color: {color};">
-        <div class="label">Best city</div>
+        <div class="label">Cleanest city</div>
         <div class="value" style="font-size: 1.15rem;">{best_city}</div>
         <div class="change">AQI {best_aqi:.2f}</div></div>""",
         unsafe_allow_html=True,
@@ -654,11 +778,19 @@ with col5:
 st.markdown("---")
 
 # ---------- Tabs ----------
-tab1, tab2, tab3, tab4, tab5 = st.tabs(
-    ["Overview", "Cities", "Trends", "Correlations", "Data"]
-)
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
+    "📊 Overview",
+    "🏙️ Cities",
+    "📈 Time Trends",
+    "🔗 Correlations",
+    "📅 Seasonal",
+    "⚠️ Anomalies",
+    "✅ Data Quality",
+    "📋 Raw Data"
+])
 
 with tab1:
+    """Overview: geographic map and AQI distribution"""
     col1, col2 = st.columns([2, 1])
 
     with col1:
@@ -702,6 +834,7 @@ with tab1:
             )
 
 with tab2:
+    """Detailed city comparison"""
     st.markdown('<div class="section-label">City comparison</div>', unsafe_allow_html=True)
 
     city_stats = filtered.groupby("city_name").agg(
@@ -715,18 +848,22 @@ with tab2:
     fig_city_bar = px.bar(
         city_stats.reset_index(), x="city_name", y="Avg AQI",
         color="Avg AQI", color_continuous_scale="RdYlGn_r",
+        title="Average AQI by city",
     )
     st.plotly_chart(fig_city_bar, use_container_width=True)
 
-    fig_box = px.box(filtered, x="city_name", y="aqi", color="city_name")
+    fig_box = px.box(filtered, x="city_name", y="aqi", color="city_name",
+                     title="AQI distribution by city")
     st.plotly_chart(fig_box, use_container_width=True)
 
 with tab3:
+    """Time trends: time series, hourly profiles, weekday vs weekend"""
     st.markdown('<div class="section-label">Time trends</div>', unsafe_allow_html=True)
 
     trend_cities = st.multiselect(
         "Cities for trends", selected_cities,
         default=selected_cities[:3] if len(selected_cities) > 3 else selected_cities,
+        key="trend_cities"
     )
 
     if trend_cities:
@@ -738,15 +875,25 @@ with tab3:
             .resample("1D").mean()
             .reset_index()
         )
-        fig_trend = px.line(daily, x="timestamp_utc", y="aqi", color="city_name")
+        daily["aqi_smooth"] = daily.groupby("city_name")["aqi"].transform(
+            lambda s: s.rolling(7, min_periods=1).mean()
+        )
+
+        fig_trend = px.line(
+            daily, x="timestamp_utc", y="aqi_smooth", color="city_name",
+            labels={"aqi_smooth": "AQI (7-day rolling avg)", "timestamp_utc": "Date"},
+            title="AQI trend (7-day rolling average)"
+        )
         fig_trend.update_layout(height=380)
         st.plotly_chart(fig_trend, use_container_width=True)
 
-        st.markdown('<div class="section-label">Hourly profile</div>', unsafe_allow_html=True)
+        st.markdown('<div class="section-label">Hourly profile (day/night cycle)</div>', unsafe_allow_html=True)
         hourly_pivot = trend_data.pivot_table(index="hour", columns="city_name", values="aqi", aggfunc="mean")
         fig_heatmap = px.imshow(
-            hourly_pivot, labels=dict(x="City", y="Hour", color="AQI"),
+            hourly_pivot, 
+            labels=dict(x="City", y="Hour (UTC)", color="AQI"),
             color_continuous_scale="RdYlGn_r",
+            title="Average AQI by hour of day"
         )
         fig_heatmap.update_layout(height=380)
         st.plotly_chart(fig_heatmap, use_container_width=True)
@@ -755,44 +902,307 @@ with tab3:
         wk = trend_data.groupby(["city_name", "is_weekend"])["aqi"].mean().reset_index()
         wk["period"] = wk["is_weekend"].map({True: "Weekend", False: "Weekday", 1: "Weekend", 0: "Weekday"})
 
-        fig_wk = px.bar(wk, x="city_name", y="aqi", color="period", barmode="group")
+        fig_wk = px.bar(
+            wk, x="city_name", y="aqi", color="period", barmode="group",
+            title="Average AQI: weekday vs weekend"
+        )
         st.plotly_chart(fig_wk, use_container_width=True)
     else:
         st.info("Select at least one city to see the trends.")
 
 with tab4:
+    """Pollutant correlations"""
     st.markdown('<div class="section-label">Pollutant correlations</div>', unsafe_allow_html=True)
 
     variables = ["aqi"] + POLLUTANTS
     corr_pollutants = st.multiselect(
         "Pollutants for the correlation matrix", variables,
         default=["aqi", "pm2_5", "pm10", "no2", "o3", "co"],
+        key="corr_pollutants"
     )
 
     if len(corr_pollutants) >= 2:
         corr_data = filtered[corr_pollutants].corr()
         fig_corr = px.imshow(
             corr_data, text_auto=".2f", color_continuous_scale="RdBu_r", zmin=-1, zmax=1,
+            title="Correlation matrix"
         )
         fig_corr.update_layout(height=480)
         st.plotly_chart(fig_corr, use_container_width=True)
 
+        if "aqi" in corr_pollutants:
+            st.markdown('<div class="section-label">Correlation with AQI — significance</div>', unsafe_allow_html=True)
+            sig_rows = []
+            for col in [c for c in corr_pollutants if c != "aqi"]:
+                valid = filtered[["aqi", col]].dropna()
+                if len(valid) >= 3:
+                    r, p = pearsonr(valid["aqi"], valid[col])
+                    sig_rows.append({"pollutant": col, "r": r, "p_value": p, "significant (p<0.05)": p < 0.05})
+            if sig_rows:
+                sig_df = pd.DataFrame(sig_rows).assign(abs_r=lambda d: d["r"].abs()) \
+                    .sort_values("abs_r", ascending=False).drop(columns="abs_r").set_index("pollutant")
+                st.dataframe(sig_df.round(4), use_container_width=True)
+            st.caption(
+                "With this many readings, p-values are almost always significant even for weak "
+                "correlations — judge relevance from |r|, not from significance alone. Also note "
+                "the AQI index is itself derived from a subset of these pollutants (mainly PM2.5/PM10), "
+                "so a strong correlation partly reflects the index's own formula rather than an "
+                "independent finding."
+            )
+
         st.markdown('<div class="section-label">Bivariate analysis</div>', unsafe_allow_html=True)
         col1, col2 = st.columns(2)
         with col1:
-            x_var = st.selectbox("X variable", variables, index=0)
+            x_var = st.selectbox("X variable", variables, index=0, key="x_var")
         with col2:
             default_idx = min(5, len(variables) - 1)
-            y_var = st.selectbox("Y variable", variables, index=default_idx)
+            y_var = st.selectbox("Y variable", variables, index=default_idx, key="y_var")
 
         fig_scatter = px.scatter(
             filtered, x=x_var, y=y_var, color="city_name", opacity=0.55, trendline="ols",
+            title=f"Relationship between {x_var} and {y_var}"
         )
         st.plotly_chart(fig_scatter, use_container_width=True)
     else:
         st.info("Select at least 2 pollutants to see the correlations.")
 
 with tab5:
+    """Seasonal and monthly trends"""
+    st.markdown('<div class="section-label">Seasonal & monthly trends</div>', unsafe_allow_html=True)
+    st.caption(
+        "Hourly data is noisy — we smooth it with a 7-day rolling average and aggregate by month to see the underlying trend."
+    )
+
+    seasonal_cities = st.multiselect(
+        "Cities for seasonal view", selected_cities,
+        default=selected_cities, key="seasonal_cities",
+    )
+
+    if seasonal_cities:
+        seasonal_data = filtered[filtered["city_name"].isin(seasonal_cities)].copy()
+        seasonal_data["month"] = seasonal_data["timestamp_utc"].dt.tz_localize(None).dt.to_period("M").astype(str)
+
+        daily_season = seasonal_data.groupby(["city_name", "date"])["aqi"].mean().reset_index()
+        daily_season = daily_season.sort_values("date")
+        daily_season["aqi_smooth"] = daily_season.groupby("city_name")["aqi"].transform(
+            lambda s: s.rolling(7, min_periods=1).mean()
+        )
+
+        fig_rolling = px.line(
+            daily_season, x="date", y="aqi_smooth", color="city_name",
+            labels={"aqi_smooth": "AQI (7-day rolling avg)", "date": "Date"},
+            title="Daily AQI trend (7-day rolling average)"
+        )
+        fig_rolling.update_layout(height=380)
+        st.plotly_chart(fig_rolling, use_container_width=True)
+
+        st.markdown('<div class="section-label">Monthly average AQI</div>', unsafe_allow_html=True)
+        monthly = seasonal_data.groupby(["city_name", "month"])["aqi"].mean().reset_index()
+        fig_monthly = px.bar(
+            monthly, x="month", y="aqi", color="city_name", barmode="group",
+            title="Monthly average AQI"
+        )
+        fig_monthly.update_layout(height=380)
+        st.plotly_chart(fig_monthly, use_container_width=True)
+
+        monthly_pivot = monthly.pivot(index="month", columns="city_name", values="aqi").round(1)
+        st.dataframe(monthly_pivot, use_container_width=True)
+    else:
+        st.info("Select at least one city to see seasonal trends.")
+
+with tab6:
+    """Multivariate anomaly detection"""
+    st.markdown('<div class="section-label">Anomaly detection</div>', unsafe_allow_html=True)
+    st.caption(
+        "A real pollution event usually moves several pollutants together, so scoring PM2.5 alone "
+        "misses spikes that show up mainly in NO2, O3 or CO — and can flag a single noisy sensor as "
+        "a \"real\" event. We compute a rolling z-score per pollutant and flag a reading when any one "
+        "of them crosses the threshold; 'pollutants in agreement' shows how many moved together, "
+        "which is a stronger signal than a single-pollutant flag."
+    )
+
+    ANOMALY_COLUMNS = ["pm2_5", "pm10", "no2", "o3", "co"]
+
+    col1, col2, col3 = st.columns([1, 1, 1.4])
+    with col1:
+        anomaly_window = st.slider(
+            "Rolling window (hours)", min_value=6, max_value=72, value=24, step=6,
+            help="Window duration for z-score calculation"
+        )
+    with col2:
+        anomaly_threshold = st.slider(
+            "Z-score threshold", min_value=1.5, max_value=5.0, value=3.0, step=0.5,
+            help="Threshold above which a value is considered anomalous"
+        )
+    with col3:
+        anomaly_columns = st.multiselect(
+            "Pollutants included", ANOMALY_COLUMNS, default=ANOMALY_COLUMNS,
+            help="Pollutants to monitor for anomaly detection"
+        )
+
+    chance_pct = 2 * norm.sf(anomaly_threshold) * 100
+    st.caption(
+        f"For a roughly normal distribution, |z| > {anomaly_threshold:.1f} flags about {chance_pct:.2f}% "
+        "of points by chance on a single pollutant — testing several independently raises the odds of "
+        "at least one false flag, which is why 'pollutants in agreement ≥ 2' is a more trustworthy filter "
+        "than any single flagged pollutant."
+    )
+
+    def flag_anomalies_multivariate(g, columns, window=24, threshold=3):
+        g = g.sort_values("timestamp_utc").copy()
+        z_cols = []
+        for col in columns:
+            rolling_mean = g[col].rolling(window, min_periods=5).mean()
+            rolling_std = g[col].rolling(window, min_periods=5).std()
+            z = (g[col] - rolling_mean) / rolling_std
+            z = z.replace([np.inf, -np.inf], np.nan)
+            g[f"z_{col}"] = z
+            z_cols.append(f"z_{col}")
+        g["z_max"] = g[z_cols].abs().max(axis=1) if z_cols else np.nan
+        g["n_pollutants_flagged"] = (g[z_cols].abs() > threshold).sum(axis=1) if z_cols else 0
+        g["is_anomaly"] = g["z_max"] > threshold if z_cols else False
+        return g
+
+    if not anomaly_columns:
+        st.info("Select at least one pollutant to run anomaly detection.")
+    else:
+        df_anomalies = filtered.groupby("city_name", group_keys=False)[filtered.columns].apply(
+            lambda g: flag_anomalies_multivariate(g, anomaly_columns, window=anomaly_window, threshold=anomaly_threshold)
+        )
+        anomalies = df_anomalies[df_anomalies["is_anomaly"]].sort_values("timestamp_utc")
+
+        m1, m2, m3, m4 = st.columns(4)
+        with m1:
+            st.markdown(
+                f"""<div class="metric-card"><div class="label">Anomalies flagged</div>
+                <div class="value">{len(anomalies):,}</div></div>""",
+                unsafe_allow_html=True,
+            )
+        with m2:
+            pct = len(anomalies) / len(filtered) * 100 if len(filtered) else 0
+            st.markdown(
+                f"""<div class="metric-card"><div class="label">Share of readings</div>
+                <div class="value">{pct:.2f}%</div></div>""",
+                unsafe_allow_html=True,
+            )
+        with m3:
+            agree_2plus = int((anomalies["n_pollutants_flagged"] >= 2).sum()) if len(anomalies) else 0
+            st.markdown(
+                f"""<div class="metric-card"><div class="label">Flagged on 2+ pollutants</div>
+                <div class="value">{agree_2plus:,}</div></div>""",
+                unsafe_allow_html=True,
+            )
+        with m4:
+            worst_city = anomalies["city_name"].value_counts().idxmax() if len(anomalies) else "—"
+            st.markdown(
+                f"""<div class="metric-card"><div class="label">Most affected city</div>
+                <div class="value" style="font-size: 1.15rem;">{worst_city}</div></div>""",
+                unsafe_allow_html=True,
+            )
+
+        display_col = "pm2_5" if "pm2_5" in anomaly_columns else anomaly_columns[0]
+        fig_anom = go.Figure()
+        for city in df_anomalies["city_name"].unique():
+            sub = df_anomalies[df_anomalies["city_name"] == city].sort_values("timestamp_utc")
+            fig_anom.add_trace(go.Scatter(
+                x=sub["timestamp_utc"], y=sub[display_col], mode="lines",
+                name=city, opacity=0.5,
+            ))
+            anom_high = sub[(sub["is_anomaly"]) & (sub[f"z_{display_col}"] > 0)]
+            anom_low = sub[(sub["is_anomaly"]) & (sub[f"z_{display_col}"] <= 0)]
+            if len(anom_high):
+                fig_anom.add_trace(go.Scatter(
+                    x=anom_high["timestamp_utc"], y=anom_high[display_col], mode="markers",
+                    marker=dict(color="#ef4444", size=6 + 4 * anom_high["n_pollutants_flagged"], symbol="triangle-up"),
+                    name=f"{city} spike", showlegend=False,
+                ))
+            if len(anom_low):
+                fig_anom.add_trace(go.Scatter(
+                    x=anom_low["timestamp_utc"], y=anom_low[display_col], mode="markers",
+                    marker=dict(color="#f97316", size=6 + 4 * anom_low["n_pollutants_flagged"], symbol="triangle-down"),
+                    name=f"{city} dip", showlegend=False,
+                ))
+        fig_anom.update_layout(
+            height=420, 
+            yaxis_title=f"{display_col.upper()} (marker size = pollutants in agreement)",
+            legend=dict(orientation="h", yanchor="bottom", y=1.02),
+            title=f"Anomaly detection on {display_col.upper()}"
+        )
+        st.plotly_chart(fig_anom, use_container_width=True)
+
+        st.markdown('<div class="section-label">Anomalies by city</div>', unsafe_allow_html=True)
+        if len(anomalies):
+            counts = anomalies["city_name"].value_counts()
+            totals = df_anomalies["city_name"].value_counts()
+            summary = pd.DataFrame({"anomalies": counts, "total_points": totals})
+            summary["pct"] = (summary["anomalies"] / summary["total_points"] * 100).round(2)
+            summary = summary.sort_values("pct", ascending=False)
+            st.dataframe(summary, use_container_width=True)
+
+            with st.expander("View flagged readings"):
+                display_cols = ["city_name", "timestamp_utc"] + anomaly_columns + ["aqi", "z_max", "n_pollutants_flagged"]
+                st.dataframe(
+                    anomalies[display_cols],
+                    use_container_width=True, height=300,
+                )
+        else:
+            st.info("No anomalies detected at the current window/threshold.")
+
+with tab7:
+    """Data quality checks"""
+    st.markdown('<div class="section-label">Data quality</div>', unsafe_allow_html=True)
+    st.caption(
+        "What's actually in the warehouse for the current filters: missing values, duplicates, gaps in the hourly cadence, and out-of-range readings."
+    )
+
+    q1, q2, q3 = st.columns(3)
+
+    missing = filtered[POLLUTANTS + ["aqi"]].isna().sum()
+    missing_pct_total = (missing.sum() / (len(filtered) * (len(POLLUTANTS) + 1)) * 100) if len(filtered) else 0
+    dupes = filtered.duplicated(subset=["city_name", "timestamp_utc"]).sum()
+    dupes_pct = (dupes / len(filtered) * 100) if len(filtered) else 0
+    negatives = int((filtered[POLLUTANTS + ["aqi"]] < 0).sum().sum())
+
+    with q1:
+        st.markdown(
+            f"""<div class="metric-card"><div class="label">Missing values</div>
+            <div class="value">{missing_pct_total:.2f}%</div></div>""",
+            unsafe_allow_html=True,
+        )
+    with q2:
+        st.markdown(
+            f"""<div class="metric-card"><div class="label">Duplicate (city, timestamp)</div>
+            <div class="value">{dupes:,}</div></div>""",
+            unsafe_allow_html=True,
+        )
+    with q3:
+        st.markdown(
+            f"""<div class="metric-card"><div class="label">Negative pollutant values</div>
+            <div class="value">{negatives:,}</div></div>""",
+            unsafe_allow_html=True,
+        )
+
+    st.markdown('<div class="section-label">Missing values per column</div>', unsafe_allow_html=True)
+    missing_df = pd.DataFrame({"missing": missing, "pct": (missing / len(filtered) * 100).round(2) if len(filtered) else missing})
+    st.dataframe(missing_df[missing_df["missing"] > 0] if missing.sum() else missing_df, use_container_width=True)
+
+    st.markdown('<div class="section-label">Hourly continuity per city</div>', unsafe_allow_html=True)
+
+    quality_sorted = filtered.sort_values(["city_name", "timestamp_utc"])
+    diffs_by_city = quality_sorted.groupby("city_name")["timestamp_utc"].diff()
+    expected = pd.Timedelta(hours=1)
+    gaps_report = pd.DataFrame({
+        "n_points": quality_sorted.groupby("city_name").size(),
+        "gaps": (diffs_by_city > expected).groupby(quality_sorted["city_name"]).sum(),
+        "max_gap": diffs_by_city.groupby(quality_sorted["city_name"]).max().astype(str),
+    })
+    st.dataframe(gaps_report, use_container_width=True)
+
+    st.markdown('<div class="section-label">Descriptive statistics</div>', unsafe_allow_html=True)
+    st.dataframe(filtered[POLLUTANTS + ["aqi"]].describe().T.round(2), use_container_width=True)
+
+with tab8:
+    """Raw data export"""
     st.markdown('<div class="section-label">Raw data</div>', unsafe_allow_html=True)
 
     page_size = st.selectbox("Rows per page", [10, 25, 50, 100], index=1)

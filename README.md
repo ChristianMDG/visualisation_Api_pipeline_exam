@@ -135,8 +135,8 @@ Neon Account (Database access)
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/your-username/aqi-consumer.git
-cd aqi-consumer
+git clone https://github.com/ChristianMDG/visualisation_Api_pipeline_exam.git
+cd visualisation_Api_pipeline_exam
 
 # 2. Create virtual environment
 python -m venv .venv
@@ -196,15 +196,16 @@ DATABASE_URL = "postgresql://username:password@host.neon.tech/neondb?sslmode=req
 ## 5. Project Structure {#structure}
 
 ```
-aqi-consumer/
+visualisation_Api_pipeline_exam/
 ├── dashboard/
-│   └── app.py                    # Main Streamlit application
+│   ├── app.py                    # Main Streamlit application (incl. DB connection)
+│   └── requirements.txt          # Dependencies for Streamlit Cloud deployment
 ├── notebooks/
 │   └── analysis.ipynb            # EDA and analysis notebook
-├── .env                          # Local environment variables
+├── .devcontainer/                # Codespaces / VS Code dev container config
+├── .env.example                  # Template for local environment variables
 ├── .gitignore                    # Ignored files
-├── config.py                     # Centralized configuration
-├── requirements.txt              # Python dependencies
+├── requirements.txt              # Python dependencies (local/full dev)
 └── README.md                     # Documentation
 ```
 
@@ -212,9 +213,8 @@ aqi-consumer/
 
 | File | Description |
 |------|-------------|
-| `dashboard/app.py` | Interactive dashboard with 5 tabs |
+| `dashboard/app.py` | Interactive dashboard with 5 tabs (database connection managed inline via `get_database_url()`) |
 | `notebooks/analysis.ipynb` | Exploratory data analysis |
-| `config.py` | Database connection management |
 | `requirements.txt` | All Python dependencies |
 
 ---
@@ -278,10 +278,10 @@ ORDER BY t.date DESC, avg_aqi DESC;
 - Efficient caching (Streamlit cache)
 
 **Performance**:
-- Limit data queries (last 30 days)
-- Use query limits (50,000 rows)
+- Load the full warehouse, capped at 100,000 rows as a safety limit (`SAFETY_ROW_CAP`)
+- Filtering by period happens client-side in the sidebar
 - Implement data pagination
-- Cache expensive operations
+- Cache expensive operations (`st.cache_data`, `st.cache_resource`)
 
 **Security**:
 - Never expose database credentials
@@ -316,8 +316,8 @@ ORDER BY t.date DESC, avg_aqi DESC;
 
 | Feature | Specification |
 |---------|---------------|
-| Data period |None |
-| Query limit | 1 000 000 rows |
+| Data period | None (full warehouse, filtered client-side) |
+| Query limit | 100,000 rows (safety cap) |
 | Cache TTL | 10 minutes |
 | Update frequency | Real-time (on query) |
 | Load time | 2-5 seconds |
@@ -328,12 +328,6 @@ ORDER BY t.date DESC, avg_aqi DESC;
 
 - **Christian** - Data Engineer & Developer
 - Project created as part of training
-
----
-
-## 📄 License
-
-MIT License - See `LICENSE` file for details.
 
 ---
 
