@@ -518,7 +518,7 @@ df, load_error, truncated = load_data()
 st.markdown(
     """
     <div class="app-header">
-        <div class="eyebrow">DataGreen · MangaRivotra</div>
+        <div class="eyebrow">Ai-R</div>
         <h1>AQI Data Warehouse</h1>
         <p>Air quality monitoring — Airflow pipeline / Postgres warehouse</p>
     </div>
@@ -554,7 +554,7 @@ with st.sidebar:
         <div class="sidebar-brand">
             <div class="dot"></div>
             <div class="brand-text">
-                <div class="brand-title">DATAGREEN</div>
+                <div class="brand-title">Ai-R</div>
                 <div class="brand-sub">AQI Warehouse Console</div>
             </div>
         </div>
